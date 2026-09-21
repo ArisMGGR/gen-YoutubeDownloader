@@ -1,0 +1,27 @@
+# Pinned versions for CI and local development ONLY.
+#
+# End users are deliberately NOT pinned: requirements.txt and `pip install .`
+# resolve yt-dlp freely, because YouTube changes break yt-dlp regularly and the
+# documented fix is `pip install -U yt-dlp`. Pinning users to a snapshot would
+# walk them straight into the failure mode the README warns about.
+#
+# What this file buys us is the opposite property for CI: a known toolchain, so
+# a red build means "this repository broke", not "something upstream changed
+# overnight". Dependabot scans this file directly - it is a plain requirements
+# file with exact pins and no local paths - and opens a PR when a new version
+# ships; that PR runs the full test suite before you merge it. It lives under
+# tests/ with the other working files, which is why .github/dependabot.yml
+# lists "/tests" as a second directory: Dependabot does not recurse.
+#
+# yt-dlp is here because YouTube changes break it constantly.
+yt-dlp==2026.8.19
+
+# ruff, pytest and mypy are here because CI runs `ruff format --check`, whose
+# output changes between ruff releases: 0.16 began formatting Markdown, for
+# instance, so an unrelated ruff release can turn this repository red on its
+# own. mypy is the same story - a release that sharpens an existing check finds
+# new errors in code that did not change. Pinning the tools makes those
+# upgrades a reviewed PR instead of a surprise.
+ruff==0.16.4
+pytest==9.1.1
+mypy==2.3.1

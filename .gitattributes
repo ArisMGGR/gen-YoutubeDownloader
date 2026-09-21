@@ -1,0 +1,22 @@
+# Line endings are normalised to LF on the way into the repository, and LF is
+# what gets checked out again - on every platform, deliberately.
+#
+# The reason is youtube_downloader.py: it carries a "#!/usr/bin/env python3"
+# shebang and the executable bit, so it is meant to be run directly. With CRLF
+# on disk, a Unix kernel reads the interpreter as "python3\r" and the failure
+# is "bad interpreter: /usr/bin/env python3^M", which does not name its own
+# cause. Everything else is listed too, so contributors on different platforms
+# do not produce whole-file diffs against each other.
+
+* text=auto eol=lf
+
+*.py    text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.toml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+LICENSE         text eol=lf

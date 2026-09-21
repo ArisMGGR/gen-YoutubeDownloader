@@ -1,0 +1,32 @@
+version: 2
+updates:
+  # The pins that Dependabot can act on all live in tests/constraints.txt: a
+  # plain requirements file of exact "==" pins, with no local paths and no
+  # includes, which Dependabot scans directly rather than having to follow the
+  # "-c" out of tests/requirements-dev.txt. Dependabot does not recurse into
+  # subdirectories, so that folder is listed as its own directory below; the
+  # root entry covers requirements.txt.
+  #
+  # Nothing else in this repository is a Dependabot target by design.
+  # pyproject.toml declares yt-dlp as an open lower bound (yt-dlp>=...), which
+  # every release already satisfies, so there is nothing there to raise a PR
+  # about; requirements.txt and tests/requirements-dev.txt only delegate to it.
+  #
+  # Each PR Dependabot opens runs the full test suite against the new version
+  # before you merge it, which is the point of pinning CI at all.
+  - package-ecosystem: pip
+    directories:
+      - "/"
+      - "/tests"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+
+  # Keeps the SHA-pinned actions in ci.yml current.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"

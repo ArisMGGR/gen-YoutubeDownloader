@@ -1,0 +1,40 @@
+name: Question
+description: Ask how to do something with this tool
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before asking:** if downloads were working and have now stopped, that
+        is almost always an outdated yt-dlp rather than a usage problem. Run
+        `pip install -U yt-dlp` and try again first.
+
+        The [README][readme] covers quality selection, audio-only mode,
+        output directories, subtitles, and the "video is not available" /
+        "HTTP Error 403" fallback.
+
+        [readme]: https://github.com/ArisMGGR/gen-YoutubeDownloader#readme
+
+  - type: textarea
+    id: question
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: What command did you run?
+      description: Leave blank if you haven't run anything yet.
+      placeholder: "youtube-downloader URL -q 720"
+    validations:
+      required: false
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS and Python version
+      placeholder: "Windows 11, Python 3.12"
+    validations:
+      required: false

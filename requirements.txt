@@ -1,0 +1,6 @@
+# pyproject.toml is the single source of truth for dependencies; this file
+# just delegates to it, so the two can never drift.
+#
+# Note: pip resolves this "." against your current working directory, so run
+# `pip install -r requirements.txt` from the repository root.
+.

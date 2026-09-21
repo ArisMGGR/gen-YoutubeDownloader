@@ -1,0 +1,18 @@
+# Delegates to pyproject.toml's [project.optional-dependencies] dev extra.
+# Run from the repository root - `pip install -r tests/requirements-dev.txt` -
+# because pip resolves the bare "." below against the current working
+# directory. The "-c" path is different: pip resolves a nested -c/-r relative
+# to the directory of the file that contains it, so constraints.txt is found
+# next to this file wherever you run from.
+#
+# The constraints file pins yt-dlp and the lint/test tools for development and
+# CI, so a red build means this repository broke rather than something upstream
+# changing overnight. It deliberately does not apply to end users - see the
+# comments in constraints.txt.
+#
+# "-e": an editable install, so the `youtube-downloader` command in the dev
+# environment runs the checkout's youtube_downloader.py. A plain ".[dev]" put a
+# *copy* of the module into site-packages, and the command kept running that
+# copy - silently - after every edit to the checkout.
+-c constraints.txt
+-e .[dev]

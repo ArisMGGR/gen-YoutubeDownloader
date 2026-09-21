@@ -1,0 +1,74 @@
+name: Bug report
+description: Something in this tool behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before filing:** most download failures are caused by an outdated
+        yt-dlp, not by a bug here. Please run `pip install -U yt-dlp` and try
+        again first.
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: >-
+        Output of `youtube-downloader --version`. That one line carries this
+        tool's version, the yt-dlp version, and the Python version.
+      placeholder: "youtube-downloader X.Y.Z (yt-dlp YYYY.MM.DD, Python 3.X.Y)"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: updated
+    attributes:
+      label: Confirmation
+      options:
+        - label: I upgraded yt-dlp (`pip install -U yt-dlp`) and the problem still happens.
+          required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: Command you ran
+      description: Please include the full command. Replace the video URL if it is private.
+      placeholder: "youtube-downloader URL -q 720"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Paste the full output, including any error message or traceback.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system
+      description: The Python version is already in the Versions field above.
+      placeholder: "Windows 11"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ffmpeg
+    attributes:
+      label: Is ffmpeg installed and on your PATH?
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true

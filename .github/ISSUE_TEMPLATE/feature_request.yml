@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest a change or addition to this tool
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Scope check:** this is a thin CLI wrapper around
+        [yt-dlp](https://github.com/yt-dlp/yt-dlp). Anything to do with how
+        videos are extracted, which formats exist, or how downloads are
+        performed belongs in yt-dlp itself, and is better proposed there.
+        Things this repository owns: its command-line options, its output
+        paths and filenames, its messages, and the player-client fallback.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation you hit, not the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+      description: If it adds or changes a flag, show the command line you'd want to type.
+      placeholder: "youtube-downloader URL --new-flag"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried instead?
+      description: >-
+        Existing flags, a yt-dlp option, a shell one-liner. If something already
+        works but is awkward, say how.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Confirmation
+      options:
+        - label: This is about the CLI wrapper, not about yt-dlp's extraction or download behaviour.
+          required: true

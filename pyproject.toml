@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gen-youtubedownloader"
+version = "1.0.1"
+description = "A simple command-line tool for downloading YouTube videos and audio, built on yt-dlp."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "ArisMGGR" }]
+keywords = ["youtube", "download", "yt-dlp", "cli"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Video",
+]
+# 2025.3.21 is the first release in which the youtube extractor is a package,
+# so `yt_dlp.extractor.youtube._base` exists - the test suite imports
+# INNERTUBE_CLIENTS from there. It is also the floor for the rest of what this
+# project reaches into: MoveFilesAfterDownloadPP (whose pp_key() is "MoveFiles")
+# and the android / web_safari / tv / web player clients. The previous floor,
+# 2025.1.1, was not a release that ever existed on PyPI, and the earliest that
+# did satisfy it (2025.1.12) still had youtube as a single module.
+dependencies = ["yt-dlp>=2025.3.21"]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.10", "pytest>=7.0", "ruff>=0.4"]
+
+[project.scripts]
+youtube-downloader = "youtube_downloader:main"
+
+[project.urls]
+Homepage = "https://github.com/ArisMGGR/gen-YoutubeDownloader"
+Issues = "https://github.com/ArisMGGR/gen-YoutubeDownloader/issues"
+Changelog = "https://github.com/ArisMGGR/gen-YoutubeDownloader/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+py-modules = ["youtube_downloader"]
+
+# Every cache the check suite writes lives under tests/, so a run leaves the
+# repository root untouched. tests/conftest.py does the same for bytecode.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+cache_dir = "tests/.pytest_cache"
+
+[tool.mypy]
+files = ["youtube_downloader.py", "tests"]
+cache_dir = "tests/.mypy_cache"
+python_version = "3.10"
+disallow_untyped_defs = true
+disallow_any_generics = true
+warn_redundant_casts = true
+# The Downloads-folder lookup is the only platform-specific code here, and its
+# Windows half is the half that uses APIs mypy can check - ctypes.windll and
+# winreg, neither of which typeshed exposes off Windows. Checking as win32 is
+# what puts that code under the type checker at all. It costs nothing on the
+# other side: mypy only prunes the branches of `if sys.platform == ...`, so
+# every function body, the XDG lookup included, is still fully checked.
+platform = "win32"
+
+# yt-dlp ships no type information, so its API arrives as Any either way.
+[[tool.mypy.overrides]]
+module = ["yt_dlp.*"]
+ignore_missing_imports = true
+
+# The strict flags above are aimed at the module that gets shipped. Test
+# functions are uniformly `def test_x(monkeypatch)` returning None, and
+# annotating all ~130 of them would add noise without catching anything.
+[[tool.mypy.overrides]]
+module = ["test_youtube_downloader"]
+disallow_untyped_defs = false
+disallow_any_generics = false
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+cache-dir = "tests/.ruff_cache"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "C4"]
