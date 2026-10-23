@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
         # The Downloads-folder resolution is the only platform-specific code
         # in the tool, and it only ever runs on Windows and macOS. One job
         # each, on the newest supported Python.

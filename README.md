@@ -13,7 +13,7 @@ A simple command-line tool for downloading YouTube videos and audio, built on [y
 
 ## Requirements
 
-- Python 3.10+ (yt-dlp itself no longer supports 3.9)
+- Python 3.11+ (yt-dlp has deprecated 3.10 and no longer supports 3.9)
 - [ffmpeg](https://ffmpeg.org/) — *optional but recommended*. Without it, downloads still work but are limited to single-file formats (usually 720p max), and audio-only MP3 mode is unavailable.
 - [Deno](https://deno.com/) — *needed for full YouTube support*. yt-dlp runs YouTube's player JavaScript in it to unlock most formats; without it, yt-dlp falls back to a client that offers fewer of them, and the tool prints yt-dlp's warning saying so. The challenge-solver scripts Deno runs come with the install below (yt-dlp's `default` extra).
 

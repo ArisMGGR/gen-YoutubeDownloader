@@ -1920,7 +1920,7 @@ def test_yt_dlp_is_required_with_its_default_extra():
 def test_the_version_guard_is_reachable_on_3_8():
     """The module must compile under the 3.8 grammar, or its guard never runs.
 
-    The `sys.version_info < (3, 10)` check exists to give 3.8 and 3.9 one
+    The `sys.version_info < (3, 11)` check exists to give 3.8 to 3.10 one
     clear sentence, but it is an ordinary statement: syntax newer than the
     interpreter - a `match` statement, say - fails the whole file at compile
     time, before the guard is reached. Nothing older than 3.8 can reach it

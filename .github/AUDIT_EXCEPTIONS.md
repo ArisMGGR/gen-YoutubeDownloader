@@ -97,18 +97,18 @@ of its own. At that point there are two sources of truth and they will drift.
 ## AX-04 — A `noqa` that suppresses the check it is demonstrating
 
 **Fires on:** `ruff`, and on reviewers who read `# noqa` as a shortcut.
-`youtube_downloader.py` carries `if sys.version_info < (3, 10):  # noqa: UP036`.
+`youtube_downloader.py` carries `if sys.version_info < (3, 11):  # noqa: UP036`.
 
 **Why it is fine:** UP036 flags version checks that are outdated relative to
 the declared `requires-python`, which is exactly what this line looks like.
-The check *is* the point: it exists so that Python 3.8 or 3.9 gets one clear
+The check *is* the point: it exists so that Python 3.8 to 3.10 gets one clear
 sentence instead of a confusing failure several imports later. It cannot help
 anything older: the module uses an assignment expression, which is 3.8 syntax,
 so 3.7 and below fail to compile the file before the guard runs (and pip
 refuses to install it there, because of `requires-python`).
 `test_the_version_guard_is_reachable_on_3_8` parses the module with the 3.8
 grammar, so syntax newer than that cannot slip in and silently move the guard
-out of reach for 3.8 and 3.9 as well. Note the comment above it — do not spell a bare `noqa` marker anywhere
+out of reach for 3.8 to 3.10 as well. Note the comment above it — do not spell a bare `noqa` marker anywhere
 in surrounding prose, because ruff parses one at the start of a comment as a
 blanket directive.
 

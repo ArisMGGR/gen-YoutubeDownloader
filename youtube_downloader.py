@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 # The UP036 suppression below is deliberate: this guard is the point - it
-# exists so that Python 3.8 or 3.9 gets a clear message instead of a
+# exists so that Python 3.8 to 3.10 gets a clear message instead of a
 # confusing failure later. Nothing older reaches it: this file uses 3.8
 # syntax (an assignment expression), so 3.7 and below fail to compile it
 # before any line runs. test_the_version_guard_is_reachable_on_3_8 keeps
@@ -32,9 +32,9 @@ from typing import Any
 # do not spell a bare noqa marker anywhere in this comment - ruff parses one
 # at the start of a comment as a blanket directive, and a malformed one
 # elsewhere as an invalid directive.
-if sys.version_info < (3, 10):  # noqa: UP036  # pragma: no cover
+if sys.version_info < (3, 11):  # noqa: UP036  # pragma: no cover
     sys.exit(
-        "This tool requires Python 3.10 or newer "
+        "This tool requires Python 3.11 or newer "
         f"(running {sys.version_info.major}.{sys.version_info.minor})."
     )
 
