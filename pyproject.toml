@@ -7,7 +7,7 @@ name = "gen-youtubedownloader"
 version = "1.0.1"
 description = "A simple command-line tool for downloading YouTube videos and audio, built on yt-dlp."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "ArisMGGR" }]
@@ -18,7 +18,6 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -32,7 +31,13 @@ classifiers = [
 # and the android / web_safari / tv / web player clients. The previous floor,
 # 2025.1.1, was not a release that ever existed on PyPI, and the earliest that
 # did satisfy it (2025.1.12) still had youtube as a single module.
-dependencies = ["yt-dlp>=2025.3.21"]
+#
+# The [default] extra is not optional for YouTube: it is what installs
+# yt-dlp-ejs, the challenge-solver scripts a JavaScript runtime (Deno) runs to
+# unlock most YouTube formats. Plain "yt-dlp" leaves them out, and even with
+# Deno installed yt-dlp then falls back to a client that serves fewer formats.
+# Deno itself is a separate install, documented in the README beside ffmpeg.
+dependencies = ["yt-dlp[default]>=2025.3.21"]
 
 [project.optional-dependencies]
 dev = ["mypy>=1.10", "pytest>=7.0", "ruff>=0.4"]
@@ -43,7 +48,6 @@ youtube-downloader = "youtube_downloader:main"
 [project.urls]
 Homepage = "https://github.com/ArisMGGR/gen-YoutubeDownloader"
 Issues = "https://github.com/ArisMGGR/gen-YoutubeDownloader/issues"
-Changelog = "https://github.com/ArisMGGR/gen-YoutubeDownloader/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 py-modules = ["youtube_downloader"]
@@ -57,7 +61,7 @@ cache_dir = "tests/.pytest_cache"
 [tool.mypy]
 files = ["youtube_downloader.py", "tests"]
 cache_dir = "tests/.mypy_cache"
-python_version = "3.10"
+python_version = "3.11"
 disallow_untyped_defs = true
 disallow_any_generics = true
 warn_redundant_casts = true
@@ -83,7 +87,7 @@ disallow_untyped_defs = false
 disallow_any_generics = false
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 88
 cache-dir = "tests/.ruff_cache"
 

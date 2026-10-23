@@ -9,7 +9,7 @@ Most "it stopped working" reports are an outdated yt-dlp rather than a bug in
 this wrapper. YouTube changes things often, and yt-dlp ships fixes quickly:
 
 ```bash
-pip install -U yt-dlp
+pip install -U "yt-dlp[default]"
 ```
 
 If that fixes it, there is nothing to report here. If it doesn't, please open
@@ -36,7 +36,7 @@ means this repository broke rather than something upstream changed overnight —
 so an unpinned ruff can turn the build red on its own. Dependabot bumps the
 pins weekly and its PR runs the suite against the new versions. End users are
 deliberately left unpinned — `pip install .` and `requirements.txt` resolve
-yt-dlp freely, because `pip install -U yt-dlp` is the documented fix when
+yt-dlp freely, because `pip install -U "yt-dlp[default]"` is the documented fix when
 downloads break.
 
 ## Before you open a pull request
@@ -56,16 +56,19 @@ wherever you run it. It checks `youtube_downloader.py` strictly — every
 function annotated, no bare generics — and the tests loosely, since annotating
 every `def test_...` would add noise without catching anything.
 
-CI runs these on Python 3.10 through 3.14 (plus one Windows and one macOS
+CI runs these on Python 3.11 through 3.14 (plus one Windows and one macOS
 job, which cover the platform-specific Downloads-folder lookup). The tool
-supports Python 3.10, so avoid syntax newer than that — `from __future__
+supports Python 3.11, so avoid syntax newer than that — `from __future__
 import annotations` is already imported, so modern type-annotation syntax is
 fine in annotations.
 
-The floor is 3.10 because yt-dlp dropped Python 3.9. On 3.9, pip silently
-resolves to a long-outdated yt-dlp that YouTube changes have already broken,
-and `pip install -U yt-dlp` cannot fix it — so claiming 3.9 support would send
-users into a dead end.
+The floor is 3.11 because yt-dlp deprecated Python 3.10 (which reached end of
+life in October 2026) and prints a "Deprecated Feature" warning on every run
+there, and it dropped Python 3.9 outright. On 3.9, pip silently resolves to a
+long-outdated yt-dlp that YouTube changes have already broken, and
+`pip install -U "yt-dlp[default]"` cannot fix it — the same dead end awaits
+3.10 once yt-dlp removes it, so claiming support for either would mislead
+users.
 
 ## Testing notes
 
@@ -91,12 +94,6 @@ that would make it a real finding again.
 If a check fires on something listed there, read the entry rather than
 re-investigating. If you are accepting a *new* finding, add an entry — and only
 after actually looking into it.
-
-## Changelog
-
-User-visible changes go in [CHANGELOG.md](CHANGELOG.md) under an `Unreleased`
-heading. Internal refactors, test-only changes, and dependency pin bumps do
-not need an entry.
 
 ## Code of conduct
 

@@ -24,14 +24,17 @@ from pathlib import Path
 from typing import Any
 
 # The UP036 suppression below is deliberate: this guard is the point - it
-# exists so that an older interpreter gets a clear message instead of a
-# confusing failure later. Keep the suppression on the `if` line itself and
+# exists so that Python 3.8 to 3.10 gets a clear message instead of a
+# confusing failure later. Nothing older reaches it: this file uses 3.8
+# syntax (an assignment expression), so 3.7 and below fail to compile it
+# before any line runs. test_the_version_guard_is_reachable_on_3_8 keeps
+# newer syntax out. Keep the suppression on the `if` line itself and
 # do not spell a bare noqa marker anywhere in this comment - ruff parses one
 # at the start of a comment as a blanket directive, and a malformed one
 # elsewhere as an invalid directive.
-if sys.version_info < (3, 10):  # noqa: UP036  # pragma: no cover
+if sys.version_info < (3, 11):  # noqa: UP036  # pragma: no cover
     sys.exit(
-        "This tool requires Python 3.10 or newer "
+        "This tool requires Python 3.11 or newer "
         f"(running {sys.version_info.major}.{sys.version_info.minor})."
     )
 
@@ -65,6 +68,18 @@ class _OwnWritePipeError(BrokenPipeError):
     """
 
 
+class _OwnWriteEncodeError(UnicodeEncodeError):
+    """An output stream that cannot hold a character this tool printed.
+
+    The same split as _OwnWritePipeError, for the same reason. yt-dlp raises
+    UnicodeEncodeError too - opening a file whose name the filesystem
+    encoding cannot represent, such as a title carrying a lone surrogate, or
+    any non-Latin title under a legacy locale - and that one is a download
+    failure. Re-raising it as this tool's own write sent the user to
+    PYTHONIOENCODING, which cannot help, and abandoned every remaining URL.
+    """
+
+
 def _print(*values: object, **kwargs: Any) -> None:
     """print(), with a closed pipe reported the same way on every platform.
 
@@ -81,12 +96,17 @@ def _print(*values: object, **kwargs: Any) -> None:
     else, so a BrokenPipeError from a socket yt-dlp was reading is still a
     download failure. EINVAL is mapped only on Windows and only for this
     tool's own writes - an EINVAL raised by yt-dlp, say for an unrepresentable
-    filename, still means what it says.
+    filename, still means what it says. A character the stream cannot encode
+    is tagged the same way, as _OwnWriteEncodeError.
     """
     try:
         print(*values, **kwargs)
     except BrokenPipeError as exc:
         raise _OwnWritePipeError(*exc.args) from exc
+    except UnicodeEncodeError as exc:
+        raise _OwnWriteEncodeError(
+            exc.encoding, exc.object, exc.start, exc.end, exc.reason
+        ) from exc
     except OSError as exc:
         if sys.platform == "win32" and exc.errno == errno.EINVAL:
             raise _OwnWritePipeError(errno.EPIPE, "Broken pipe") from exc
@@ -96,8 +116,8 @@ def _print(*values: object, **kwargs: Any) -> None:
 def version_string() -> str:
     """One line carrying everything a bug report needs.
 
-    The issue templates ask for this tool's behaviour, the yt-dlp version, and
-    the Python version, and "it stopped working" is nearly always an outdated
+    The bug report template asks for this tool's version, the yt-dlp version,
+    and the Python version, and "it stopped working" is nearly always an outdated
     yt-dlp - so print all three together rather than making someone assemble
     them from three commands.
     """
@@ -227,7 +247,13 @@ def _absolute_or_none(raw: str, *, expand: bool = True) -> Path | None:
     what a single-quoted user-dirs.dirs value means to the shell that sources
     the file, so a literal "$HOME/Videos" is then relative and falls back,
     the same way the desktop's own reader (which ignores the line) does.
+
+    A value carrying a NUL byte names no path at all, and mkdir() would
+    refuse it with ValueError - not OSError - which no handler in this module
+    names. Treat it as unset like any other unusable value.
     """
+    if "\0" in raw:
+        return None
     try:
         path = Path(os.path.expandvars(raw)).expanduser() if expand else Path(raw)
     except RuntimeError:
@@ -239,18 +265,35 @@ def _absolute_or_none(raw: str, *, expand: bool = True) -> Path | None:
     return path if path.is_absolute() else None
 
 
-def _strip_comment(raw: str) -> str:
-    """Drop a trailing shell comment from one unquoted run of text.
+def _unquoted_word(raw: str) -> str:
+    """The first shell word of an unquoted value, with its escapes applied.
 
-    A "#" opens a comment only where a word opens - at the start, or after
-    whitespace. Cutting at every "#" instead took "$HOME/Vids#1" down to
-    "$HOME/Vids": a different directory, which mkdir() then created and
-    downloaded into, while xdg-user-dirs itself reads the whole name.
+    Whitespace ends the assignment, exactly as it does after a quoted value:
+    reading on took "$HOME/Downloads trailing" as one directory name, which
+    mkdir() then created, while the shell and GLib both left the entry unset.
+    A backslash escapes the character after it, so "My\\ Videos" stays one
+    word.
+
+    A "#" opens a comment only where a word opens, so here only as the first
+    character - and needs no branch of its own: a word that starts with "#"
+    is relative, so the caller's absoluteness check already discards it.
+    Cutting at every "#" instead took "$HOME/Vids#1" down to "$HOME/Vids": a
+    different directory, which mkdir() then created and downloaded into,
+    while xdg-user-dirs itself reads the whole name.
     """
-    for index, char in enumerate(raw):
-        if char == "#" and (index == 0 or raw[index - 1].isspace()):
-            return raw[:index].strip()
-    return raw.strip()
+    word: list[str] = []
+    index = 0
+    while index < len(raw):
+        char = raw[index]
+        if char == "\\" and index + 1 < len(raw):
+            word.append(raw[index + 1])
+            index += 2
+            continue
+        if char.isspace():
+            break
+        word.append(char)
+        index += 1
+    return "".join(word)
 
 
 def _config_value(raw: str) -> tuple[str, bool]:
@@ -284,16 +327,17 @@ def _config_value(raw: str) -> tuple[str, bool]:
     the last quote instead. Anything looser than this silently resolves a
     different directory than the desktop does.
 
-    Two shell rules are knowingly not modelled, because no path a person
+    Three shell rules are knowingly not modelled, because no path a person
     would configure needs them: a backslash-escaped "$" inside double quotes
-    (the "$" would be expanded again downstream), and a tail after a
-    single-quoted section that itself carries a "$" (the whole word is taken
-    literally).
+    or in an unquoted value (the "$" would be expanded again downstream), a
+    tail after a single-quoted section that itself carries a "$" (the whole
+    word is taken literally), and a quoted section that starts part-way
+    through an unquoted value (the quote is kept as a character).
     """
     raw = raw.strip()
     quote = raw[:1]
     if quote not in ('"', "'"):
-        return _strip_comment(raw), True
+        return _unquoted_word(raw), True
     expand = quote == '"'
     value: list[str] = []
     index = 1
@@ -320,12 +364,23 @@ def _config_value(raw: str) -> tuple[str, bool]:
 
 
 def _xdg_downloads_dir() -> Path | None:
-    """Ask the XDG user-dirs config where the Downloads folder is."""
-    resolved = _absolute_or_none(os.environ.get("XDG_DOWNLOAD_DIR", "").strip())
+    """Ask the XDG user-dirs config where the Downloads folder is.
+
+    The home directory itself is never an answer, from any of the three
+    sources. xdg-user-dirs disables an entry by pointing it at $HOME, and
+    xdg-user-dir(1) echoes $HOME for an entry that is unset - either way the
+    user has not named a Downloads folder, and saving straight into $HOME
+    is not what they asked for. With no home to compare against, an absolute
+    value is taken at face value.
+    """
+    home = _home_or_none()
+
+    def answer(resolved: Path | None) -> Path | None:
+        return resolved if resolved and resolved != home else None
+
+    resolved = answer(_absolute_or_none(os.environ.get("XDG_DOWNLOAD_DIR", "").strip()))
     if resolved:
         return resolved
-
-    home = _home_or_none()
 
     xdg_user_dir = shutil.which("xdg-user-dir")
     if xdg_user_dir:
@@ -344,11 +399,8 @@ def _xdg_downloads_dir() -> Path | None:
         except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
             pass
         else:
-            resolved = _absolute_or_none(result.stdout.strip())
-            # xdg-user-dir echoes $HOME when the entry is unset. With no home
-            # to compare against we cannot tell an echo from a real answer, so
-            # an absolute reply is taken at face value.
-            if resolved and resolved != home:
+            resolved = answer(_absolute_or_none(result.stdout.strip()))
+            if resolved:
                 return resolved
 
     config_home = _absolute_or_none(os.environ.get("XDG_CONFIG_HOME", "").strip())
@@ -365,7 +417,8 @@ def _xdg_downloads_dir() -> Path | None:
     # not valid UTF-8, and UnicodeDecodeError is a ValueError rather than an
     # OSError - so on its own the OSError clause let it out of this function,
     # past _run(), and past main(), which handles only KeyboardInterrupt,
-    # BrokenPipeError and DownloaderError. The user got a traceback before any
+    # BrokenPipeError, UnicodeEncodeError and DownloaderError (a decode error
+    # is not an encode error). The user got a traceback before any
     # download was attempted. An undecodable file tells us nothing, so treat it
     # the same way as an unreadable one and fall back to ~/Downloads.
     except (OSError, UnicodeDecodeError):
@@ -391,7 +444,9 @@ def _xdg_downloads_dir() -> Path | None:
         resolved = _absolute_or_none(value, expand=expand)
         if resolved:
             found = resolved
-    return found
+    # Compared after the scan, not per line: a later "$HOME" disables the
+    # entry, so it must override an earlier real directory, not be skipped.
+    return answer(found)
 
 
 def default_download_dir() -> Path:
@@ -508,8 +563,8 @@ class ProgressReporter:
             self._line_open = False
 
 
-class _SilentLogger:
-    """Where yt-dlp's own console output goes: nowhere.
+class _YtDlpLogger:
+    """Where yt-dlp's own console output goes: its warnings, and nothing else.
 
     "quiet" and "no_warnings" are not the switches they look like. With no
     logger set, YoutubeDL.trouble() still writes every "ERROR: ..." line to
@@ -518,17 +573,40 @@ class _SilentLogger:
     landed appended to the live line, and then appeared a second time in this
     tool's own "Failed to download ..." message, which carries the same text.
     A logger routes all three of yt-dlp's channels (to_screen, warnings,
-    errors) through this object instead, and every failure is still reported
-    exactly once, by download(), from the exception yt-dlp raised. Three
-    channels, three methods: yt-dlp calls debug(), warning() and error() on
-    the logger it is given, and nothing else.
+    errors) through this object instead. Three channels, three methods:
+    yt-dlp calls debug(), warning() and error() on the logger it is given, and
+    nothing else. error() drops its message, because every failure is still
+    reported exactly once, by download(), from the exception yt-dlp raised;
+    debug() drops to_screen()'s chatter and yt-dlp's own progress line.
+
+    warning() is the one channel nothing else reports, so it is printed.
+    Dropping it hid the sentence that explains a missing format - "No
+    supported JavaScript runtime could be found", or formats skipped for want
+    of a PO token - and the user got a lower quality, or "Requested format is
+    not available", with no cause to act on. "no_warnings" does not stop
+    yt-dlp handing warnings to a logger. Each one is printed once per run, on
+    stderr, after closing the progress line it would otherwise land on:
+    yt-dlp does not pass its only_once flag to a logger, and the retry ladder
+    builds a fresh YoutubeDL per attempt, so the same warning otherwise
+    repeated for every client tried and every URL.
+
+    `reporter` is the current URL's ProgressReporter; download() sets it.
     """
+
+    def __init__(self) -> None:
+        self.reporter: ProgressReporter | None = None
+        self._seen: set[str] = set()
 
     def debug(self, message: str) -> None:
         pass
 
     def warning(self, message: str) -> None:
-        pass
+        if message in self._seen:
+            return
+        self._seen.add(message)
+        if self.reporter is not None:
+            self.reporter.close()
+        _print(f"Warning: {message}", file=sys.stderr)
 
     def error(self, message: str) -> None:
         pass
@@ -821,6 +899,8 @@ def download(
 ) -> int:
     """Download one or more videos. Returns the number of failures.
 
+    A leading "~" in output_dir is expanded, as the CLI does for -o.
+
     Raises DownloaderError for a problem that stops the run before any
     download is attempted; main() prints it and exits non-zero.
     """
@@ -842,7 +922,17 @@ def download(
     # reaches yt-dlp as text, interpolated into the format selector below,
     # and yt-dlp's filter grammar rejects anything but ASCII digits:
     # "Invalid filter specification 'height<=...'".
-    if quality != "best" and not (quality.isascii() and quality.isdecimal()):
+    #
+    # And int() itself, last: past sys.get_int_max_str_digits() - 4300 digits
+    # unless configured otherwise - it refuses even an ASCII decimal string,
+    # which was the same bare ValueError again.
+    valid = quality == "best" or (quality.isascii() and quality.isdecimal())
+    if valid and quality != "best":
+        try:
+            int(quality)
+        except ValueError:
+            valid = False
+    if not valid:
         raise DownloaderError(
             f"Invalid quality {quality!r}: expected 'best' or a height in "
             f"pixels, e.g. '1080'."
@@ -884,6 +974,13 @@ def download(
             file=sys.stderr,
         )
 
+    # yt-dlp also runs the template through expanduser(), so a leading "~"
+    # left in place was created literally by mkdir() - "./~/Clips" under the
+    # working directory - while the file went to $HOME/Clips. main() expands
+    # -o before calling, but a direct caller's Path("~/Clips") arrived here
+    # untouched. Expanding is idempotent, so doing it again costs nothing.
+    output_dir = _expand_output_dir(output_dir)
+
     # The directory goes into the template as text, and yt-dlp runs the whole
     # template through %-substitution and expandvars(): a directory named
     # "100%(x)s" or "D:\%USERNAME%\vids" (PowerShell does not expand %...%)
@@ -896,9 +993,12 @@ def download(
     # is refused instead, but only when expansion would actually change the
     # path - a "$5" with no variable called 5 is left alone. "%" is masked
     # first so that the "%NAME%" case, already handled above, does not trip
-    # the comparison on Windows.
+    # the comparison on Windows. Masked with a space, not deleted: a space
+    # ends a variable name the way the "%" does in yt-dlp's copy, whereas
+    # deleting it joined "$CLIPS%x" into "$CLIPSx" - no such variable, so
+    # the guard passed while yt-dlp expanded $CLIPS.
     directory = str(output_dir)
-    masked = directory.replace("%", "")
+    masked = directory.replace("%", " ")
     if os.path.expandvars(masked) != masked:
         raise DownloaderError(
             f"Cannot use output directory '{output_dir}': it contains a "
@@ -913,12 +1013,24 @@ def download(
         raise DownloaderError(
             f"Cannot use output directory '{output_dir}': {exc.strerror or exc}"
         ) from exc
+    except ValueError as exc:
+        # A NUL byte in the name: mkdir() refuses it with ValueError, not
+        # OSError, and a direct caller got that bare instead of the
+        # DownloaderError this function promises. Quoted with repr() so the
+        # message shows the NUL rather than printing it.
+        raise DownloaderError(
+            f"Cannot use output directory {directory!r}: {exc}"
+        ) from exc
 
     # A numeric -q is a preferred maximum, not a hard one: the selector falls
     # back to an uncapped tier rather than failing. Warn when it does.
     cap_height = int(quality) if not audio_only and quality != "best" else None
 
     outtmpl = os.path.join(directory.replace("%", "%%"), "%(title)s [%(id)s].%(ext)s")
+
+    # One logger for the whole run, so a warning repeated by every attempt and
+    # every URL is printed once; it is pointed at each URL's reporter below.
+    logger = _YtDlpLogger()
 
     opts = {
         "format": build_format_selector(quality, audio_only, have_ffmpeg),
@@ -934,17 +1046,20 @@ def download(
         # the loop below.
         "quiet": True,
         "no_warnings": True,
-        # "quiet" does not imply "noprogress" for an API caller: without this,
-        # yt-dlp draws its own "[download]  42.0% of ..." line on stdout with a
-        # carriage return, and ProgressReporter.hook() then redraws a shorter
-        # line on top of it, leaving the tail of yt-dlp's showing. The hook
-        # still receives _percent_str and friends - report_progress() fills
-        # them in before it consults the (now silent) printer.
+        # The second of two guards on yt-dlp's own "[download]  42.0% of ..."
+        # line. With a logger set, yt-dlp already sends that line to the
+        # logger's debug() - which _YtDlpLogger drops - rather than to
+        # stdout. "noprogress" swaps in a printer that draws nothing at all,
+        # so the line stays off the terminal even without the logger; "quiet"
+        # does not do that for an API caller. Drawn, it would sit under
+        # ProgressReporter.hook()'s shorter line and leave its tail showing.
+        # The hook still receives _percent_str and friends - report_progress()
+        # fills them in before it consults the (now silent) printer.
         "noprogress": True,
-        # See _SilentLogger: yt-dlp's "ERROR:" lines otherwise reach stderr
+        # See _YtDlpLogger: yt-dlp's "ERROR:" lines otherwise reach stderr
         # directly, on top of the open progress line and duplicating the
         # message download() prints from the exception.
-        "logger": _SilentLogger(),
+        "logger": logger,
         # Merge separate video/audio streams into mp4 (only possible with ffmpeg).
         "merge_output_format": "mp4" if (have_ffmpeg and not audio_only) else None,
     }
@@ -991,6 +1106,7 @@ def download(
         # nothing today, since close() runs unconditionally at the end of
         # every URL below and leaves the state closed either way.
         reporter = ProgressReporter()
+        logger.reporter = reporter
         hooks: list[Callable[[dict[str, Any]], None]] = [reporter.hook]
         if cap_height is not None:
             # Registered after the reporter, so the progress line is already
@@ -1039,7 +1155,7 @@ def download(
                         )
                     continue
                 break
-            except (_OwnWritePipeError, UnicodeEncodeError):
+            except (_OwnWritePipeError, _OwnWriteEncodeError):
                 # Not download failures at all: both come from this tool's own
                 # writes. A reader that went away (piping into head, quitting a
                 # pager) and an output stream whose encoding cannot hold a
@@ -1049,9 +1165,11 @@ def download(
                 # main() handles each the way it says it does. This clause
                 # sees them raised from the postprocessor hook; a pipe closed
                 # during the download itself arrives as a DownloadError and
-                # is unwrapped above. The tool's own pipe class, not the base
-                # BrokenPipeError: one of those raised bare by anything else
-                # is a failure of that thing, and falls through to be recorded.
+                # is unwrapped above. The tool's own classes, not the base
+                # BrokenPipeError and UnicodeEncodeError: one of those raised
+                # bare by anything else - yt-dlp opening a file whose name the
+                # filesystem encoding cannot hold, say - is a failure of that
+                # thing, and falls through to be recorded.
                 raise
             except Exception as exc:
                 # Anything else - a full disk, a permission error on the
@@ -1099,12 +1217,15 @@ def _output_dir(raw: str) -> Path:
 def _expand_output_dir(path: Path) -> Path:
     """Expand a leading "~" in -o, as a message rather than a traceback.
 
+    Called by _run() for -o and again by download() for a direct caller's
+    output_dir, since yt-dlp would otherwise expand the "~" itself.
+
     Path.expanduser() raises RuntimeError - not OSError - when it cannot
     resolve the "~": on POSIX "~someone" naming a user with no passwd entry is
     the easy way to get one, and a bare "~" does it wherever no home directory
     is set. That escaped _run() and main(), which handle only
-    KeyboardInterrupt, BrokenPipeError and DownloaderError, so a mistyped
-    username reached the user as a traceback.
+    KeyboardInterrupt, BrokenPipeError, UnicodeEncodeError and
+    DownloaderError, so a mistyped username reached the user as a traceback.
     """
     try:
         return path.expanduser()
@@ -1116,8 +1237,12 @@ def _expand_output_dir(path: Path) -> Path:
         ) from exc
 
 
-def _require_terminal() -> None:
+def _require_terminal(prog: str) -> None:
     """Refuse to run unless stdout and stderr are both a real terminal.
+
+    `prog` is the name the refusal gives the tool: the parser's, so that the
+    installed `youtube-downloader` command is not told off as a file called
+    youtube_downloader.py that the user never ran.
 
     Called from _run() once the arguments have parsed, so --help, --version
     and argument errors keep working when piped, and never at import time.
@@ -1138,7 +1263,7 @@ def _require_terminal() -> None:
         return
     try:
         sys.stderr.write(
-            "youtube_downloader.py must be run directly in a terminal "
+            f"{prog} must be run directly in a terminal "
             "(piping or redirecting output is not supported).\n"
         )
         sys.stderr.flush()
@@ -1190,7 +1315,7 @@ def _run() -> None:
         default="best",
         choices=["best", "2160", "1440", "1080", "720", "480", "360"],
         help="Preferred maximum video resolution (default: best). If no format "
-        "fits the cap, the closest available is downloaded instead and a "
+        "fits the cap, the best available is downloaded instead and a "
         "warning is printed. Ignored with --audio-only",
     )
     parser.add_argument(
@@ -1225,7 +1350,7 @@ def _run() -> None:
 
     # After parsing, so --help and --version work when piped; before any
     # lookup, download or progress output.
-    _require_terminal()
+    _require_terminal(parser.prog)
 
     if args.audio_only and args.quality != "best":
         _print(
