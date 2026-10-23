@@ -30,11 +30,11 @@ equally harmless.
 ## AX-02 — `yt-dlp` is deliberately not pinned for users
 
 **Fires on:** dependency scanners and reviewers who expect a lockfile.
-`pyproject.toml` declares `yt-dlp>=2025.3.21` — an open upper bound — and
+`pyproject.toml` declares `yt-dlp[default]>=2025.3.21` — an open upper bound — and
 `requirements.txt` inherits it.
 
 **Why it is fine:** YouTube changes break yt-dlp regularly, and the documented
-fix is `pip install -U yt-dlp`. Pinning users to a snapshot would walk them
+fix is `pip install -U "yt-dlp[default]"`. Pinning users to a snapshot would walk them
 straight into the failure mode the README warns about, and there would be no
 way out that did not involve editing this repository. CI *is* pinned, in
 `tests/constraints.txt`, so a red build means this repository broke rather than
@@ -45,12 +45,18 @@ its PR runs the full suite against the new version.
 breaking API change to something this module reaches into. Today the module
 touches exactly three yt-dlp attributes — `yt_dlp.YoutubeDL`,
 `yt_dlp.utils.DownloadError` (on which the whole retry ladder pivots) and
-`yt_dlp.version.__version__` (which `-V` and all three issue templates
-promise) — plus the `progress_hooks` / `postprocessor_hooks` /
-`extractor_args` / `noprogress` / `logger` options and the `MoveFiles`
-postprocessor key. The floor in `pyproject.toml` would then need raising. The
-two tests written specifically to pin these names against the real yt-dlp
-(`test_the_announce_hook_postprocessor_name_still_exists` and
+`yt_dlp.version.__version__` (which `-V` prints and the bug report template
+asks for). It also passes yt-dlp these option names, which yt-dlp silently
+ignores if it no longer knows them: `format`, `outtmpl`, `noplaylist`,
+`playlist_items`, `quiet`, `no_warnings`, `noprogress`, `logger`,
+`merge_output_format`, `postprocessors`, `progress_hooks`,
+`postprocessor_hooks`, `extractor_args`, `writesubtitles`,
+`writeautomaticsub` and `subtitleslangs`. And it names two postprocessors by
+key: `FFmpegExtractAudio`, which `--audio-only` asks for, and `MoveFiles`,
+which the announce hook listens for. The floor in `pyproject.toml` would then
+need raising. The three tests written specifically to pin these names against
+the real yt-dlp (`test_the_announce_hook_postprocessor_name_still_exists`,
+`test_the_audio_extraction_postprocessor_key_still_resolves` and
 `test_every_configured_player_client_is_known_to_yt_dlp`) are what should
 catch such a rename first; `test_move_files_key_matches_yt_dlp`,
 `test_selectors_resolve_against_real_formats`, the two `test_real_yt_dlp_*`
@@ -95,9 +101,14 @@ of its own. At that point there are two sources of truth and they will drift.
 
 **Why it is fine:** UP036 flags version checks that are outdated relative to
 the declared `requires-python`, which is exactly what this line looks like.
-The check *is* the point: it exists so that an interpreter older than the
-floor gets one clear sentence instead of a confusing failure several imports
-later. Note the comment above it — do not spell a bare `noqa` marker anywhere
+The check *is* the point: it exists so that Python 3.8 or 3.9 gets one clear
+sentence instead of a confusing failure several imports later. It cannot help
+anything older: the module uses an assignment expression, which is 3.8 syntax,
+so 3.7 and below fail to compile the file before the guard runs (and pip
+refuses to install it there, because of `requires-python`).
+`test_the_version_guard_is_reachable_on_3_8` parses the module with the 3.8
+grammar, so syntax newer than that cannot slip in and silently move the guard
+out of reach for 3.8 and 3.9 as well. Note the comment above it — do not spell a bare `noqa` marker anywhere
 in surrounding prose, because ruff parses one at the start of a comment as a
 blanket directive.
 

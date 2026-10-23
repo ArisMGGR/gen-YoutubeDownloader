@@ -3,5 +3,5 @@ contact_links:
   - name: Downloads suddenly stopped working
     url: https://github.com/yt-dlp/yt-dlp/wiki/FAQ
     about: >-
-      YouTube changes break yt-dlp regularly. Run `pip install -U yt-dlp` first -
+      YouTube changes break yt-dlp regularly. Run `pip install -U "yt-dlp[default]"` first -
       this fixes the large majority of "it stopped working" reports.

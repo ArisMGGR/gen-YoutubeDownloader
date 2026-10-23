@@ -32,7 +32,13 @@ classifiers = [
 # and the android / web_safari / tv / web player clients. The previous floor,
 # 2025.1.1, was not a release that ever existed on PyPI, and the earliest that
 # did satisfy it (2025.1.12) still had youtube as a single module.
-dependencies = ["yt-dlp>=2025.3.21"]
+#
+# The [default] extra is not optional for YouTube: it is what installs
+# yt-dlp-ejs, the challenge-solver scripts a JavaScript runtime (Deno) runs to
+# unlock most YouTube formats. Plain "yt-dlp" leaves them out, and even with
+# Deno installed yt-dlp then falls back to a client that serves fewer formats.
+# Deno itself is a separate install, documented in the README beside ffmpeg.
+dependencies = ["yt-dlp[default]>=2025.3.21"]
 
 [project.optional-dependencies]
 dev = ["mypy>=1.10", "pytest>=7.0", "ruff>=0.4"]
@@ -43,7 +49,6 @@ youtube-downloader = "youtube_downloader:main"
 [project.urls]
 Homepage = "https://github.com/ArisMGGR/gen-YoutubeDownloader"
 Issues = "https://github.com/ArisMGGR/gen-YoutubeDownloader/issues"
-Changelog = "https://github.com/ArisMGGR/gen-YoutubeDownloader/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 py-modules = ["youtube_downloader"]

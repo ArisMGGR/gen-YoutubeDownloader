@@ -2,7 +2,7 @@
 #
 # End users are deliberately NOT pinned: requirements.txt and `pip install .`
 # resolve yt-dlp freely, because YouTube changes break yt-dlp regularly and the
-# documented fix is `pip install -U yt-dlp`. Pinning users to a snapshot would
+# documented fix is `pip install -U "yt-dlp[default]"`. Pinning users to a snapshot would
 # walk them straight into the failure mode the README warns about.
 #
 # What this file buys us is the opposite property for CI: a known toolchain, so

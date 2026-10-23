@@ -19,8 +19,6 @@ keep it small are the ones most likely to be merged - see CONTRIBUTING.md.
 - [ ] `pytest -q`
 - [ ] Bug fix only: a test that fails without the fix, and I checked that it
       does fail, not just that it passes afterwards.
-- [ ] User-visible change: an entry in `CHANGELOG.md` under `Unreleased`.
-      (Internal refactors, test-only changes, and pin bumps do not need one.)
 
 ## Scope
 

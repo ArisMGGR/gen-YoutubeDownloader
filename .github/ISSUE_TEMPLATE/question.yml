@@ -7,7 +7,7 @@ body:
       value: |
         **Before asking:** if downloads were working and have now stopped, that
         is almost always an outdated yt-dlp rather than a usage problem. Run
-        `pip install -U yt-dlp` and try again first.
+        `pip install -U "yt-dlp[default]"` and try again first.
 
         The [README][readme] covers quality selection, audio-only mode,
         output directories, subtitles, and the "video is not available" /

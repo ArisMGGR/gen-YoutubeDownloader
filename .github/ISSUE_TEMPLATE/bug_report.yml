@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         **Before filing:** most download failures are caused by an outdated
-        yt-dlp, not by a bug here. Please run `pip install -U yt-dlp` and try
+        yt-dlp, not by a bug here. Please run `pip install -U "yt-dlp[default]"` and try
         again first.
 
   - type: input
@@ -25,7 +25,7 @@ body:
     attributes:
       label: Confirmation
       options:
-        - label: I upgraded yt-dlp (`pip install -U yt-dlp`) and the problem still happens.
+        - label: I upgraded yt-dlp (`pip install -U "yt-dlp[default]"`) and the problem still happens.
           required: true
 
   - type: input

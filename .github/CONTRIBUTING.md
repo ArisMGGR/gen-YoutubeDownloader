@@ -9,7 +9,7 @@ Most "it stopped working" reports are an outdated yt-dlp rather than a bug in
 this wrapper. YouTube changes things often, and yt-dlp ships fixes quickly:
 
 ```bash
-pip install -U yt-dlp
+pip install -U "yt-dlp[default]"
 ```
 
 If that fixes it, there is nothing to report here. If it doesn't, please open
@@ -36,7 +36,7 @@ means this repository broke rather than something upstream changed overnight —
 so an unpinned ruff can turn the build red on its own. Dependabot bumps the
 pins weekly and its PR runs the suite against the new versions. End users are
 deliberately left unpinned — `pip install .` and `requirements.txt` resolve
-yt-dlp freely, because `pip install -U yt-dlp` is the documented fix when
+yt-dlp freely, because `pip install -U "yt-dlp[default]"` is the documented fix when
 downloads break.
 
 ## Before you open a pull request
@@ -64,7 +64,7 @@ fine in annotations.
 
 The floor is 3.10 because yt-dlp dropped Python 3.9. On 3.9, pip silently
 resolves to a long-outdated yt-dlp that YouTube changes have already broken,
-and `pip install -U yt-dlp` cannot fix it — so claiming 3.9 support would send
+and `pip install -U "yt-dlp[default]"` cannot fix it — so claiming 3.9 support would send
 users into a dead end.
 
 ## Testing notes
@@ -91,12 +91,6 @@ that would make it a real finding again.
 If a check fires on something listed there, read the entry rather than
 re-investigating. If you are accepting a *new* finding, add an entry — and only
 after actually looking into it.
-
-## Changelog
-
-User-visible changes go in [CHANGELOG.md](CHANGELOG.md) under an `Unreleased`
-heading. Internal refactors, test-only changes, and dependency pin bumps do
-not need an entry.
 
 ## Code of conduct
 

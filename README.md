@@ -15,6 +15,7 @@ A simple command-line tool for downloading YouTube videos and audio, built on [y
 
 - Python 3.10+ (yt-dlp itself no longer supports 3.9)
 - [ffmpeg](https://ffmpeg.org/) — *optional but recommended*. Without it, downloads still work but are limited to single-file formats (usually 720p max), and audio-only MP3 mode is unavailable.
+- [Deno](https://deno.com/) — *needed for full YouTube support*. yt-dlp runs YouTube's player JavaScript in it to unlock most formats; without it, yt-dlp falls back to a client that offers fewer of them, and the tool prints yt-dlp's warning saying so. The challenge-solver scripts Deno runs come with the install below (yt-dlp's `default` extra).
 
 ## Installation
 
@@ -22,7 +23,7 @@ A simple command-line tool for downloading YouTube videos and audio, built on [y
 pip install .
 ```
 
-That pulls in yt-dlp and adds a `youtube-downloader` command you can run from
+That pulls in yt-dlp (with its `default` extra) and adds a `youtube-downloader` command you can run from
 anywhere. Running `pip install -r requirements.txt` from the repository root
 does the same thing - the requirements files delegate to `pyproject.toml`,
 which is the single source of truth for dependencies.
@@ -40,6 +41,13 @@ Install ffmpeg if you don't have it:
 - **Windows:** `winget install ffmpeg` or download from [ffmpeg.org](https://ffmpeg.org/download.html)
 
 On Windows, open a **new** terminal after installing ffmpeg so it's picked up on your PATH. If ffmpeg isn't found, the tool automatically falls back to lower-quality single-file downloads and prints a warning.
+
+Install Deno the same way:
+
+- **Any platform:** `pip install deno`, in the same environment as this tool
+- **Windows:** `winget install DenoLand.Deno`
+- **macOS:** `brew install deno`
+- **Linux:** `curl -fsSL https://deno.land/install.sh | sh`, or your distribution's package
 
 ## Usage
 
@@ -117,7 +125,8 @@ is listed in a single message, so you fix them all in one go.
 
 `-q` is a *preferred* maximum, not a hard one. If no format satisfies the cap —
 say you ask for `-q 360` on a video whose smallest format is 720p — the tool
-downloads the closest available rather than failing outright, and prints a
+downloads the best available format rather than failing outright (the
+highest resolution on offer, not the one nearest the cap), and prints a
 warning naming the video and the height it actually got. Failing would be the
 less useful behaviour; doing it silently would be the worse one. When you pass
 several URLs, each video that overruns the cap gets its own warning.
@@ -135,7 +144,9 @@ to the plain web client alone, which helps when working out exactly which
 client a particular video needs.
 
 If these errors start appearing on many videos, YouTube has likely changed
-something on their side — update yt-dlp first: `pip install -U yt-dlp`.
+something on their side — update yt-dlp first: `pip install -U "yt-dlp[default]"`.
+Keep the `[default]` part: it updates the challenge-solver scripts along with
+yt-dlp, and a newer yt-dlp refuses the old ones.
 
 ## Reporting a problem
 
@@ -172,8 +183,7 @@ ever fetched. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for details.
 Bug reports and pull requests are welcome — see
 [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the development setup and the checks to
 run before opening one. Participation is governed by the
-[Code of Conduct](.github/CODE_OF_CONDUCT.md), and user-visible changes are recorded in
-[CHANGELOG.md](CHANGELOG.md). To report a security problem privately, see
+[Code of Conduct](.github/CODE_OF_CONDUCT.md). To report a security problem privately, see
 [SECURITY.md](.github/SECURITY.md).
 
 ## License

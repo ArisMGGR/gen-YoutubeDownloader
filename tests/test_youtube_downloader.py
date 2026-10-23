@@ -6,6 +6,7 @@ so the retry ladder can be driven deterministically.
 
 from __future__ import annotations
 
+import argparse
 import io
 import sys
 import types
@@ -54,11 +55,35 @@ def test_ffmpeg_capped_selector_has_an_uncapped_fallback():
 
 
 @pytest.mark.parametrize(
-    "quality", ["best", "2160", "1440", "1080", "720", "480", "360"]
+    ("quality", "have_ffmpeg", "expected"),
+    [
+        ("best", True, "video-1080+audio"),
+        ("2160", True, "video-1080+audio"),
+        ("1440", True, "video-1080+audio"),
+        ("1080", True, "video-1080+audio"),
+        # No video-only stream fits the cap, but a progressive one does: the
+        # middle best[height<=Q] tier is what picks it over the 1080p merge.
+        ("720", True, "prog-720"),
+        # Nothing fits at all: the uncapped tier, i.e. the best there is, not
+        # the closest to the cap.
+        ("480", True, "video-1080+audio"),
+        ("360", True, "video-1080+audio"),
+        ("best", False, "prog-720"),
+        ("2160", False, "prog-720"),
+        ("1440", False, "prog-720"),
+        ("1080", False, "prog-720"),
+        ("720", False, "prog-720"),
+        ("480", False, "prog-720"),
+        ("360", False, "prog-720"),
+    ],
 )
-@pytest.mark.parametrize("have_ffmpeg", [True, False])
-def test_selectors_resolve_against_real_formats(quality, have_ffmpeg):
-    """Every selector the CLI can emit must match a real-world format list."""
+def test_selectors_resolve_against_real_formats(quality, have_ffmpeg, expected):
+    """Every selector the CLI can emit picks the expected real-world format.
+
+    Asserting only that something matched passed with the middle tier of the
+    capped ffmpeg selector deleted: every selector ends in an uncapped tier,
+    so it always matches something. Which format is picked is the behaviour.
+    """
     formats = [
         {
             "format_id": "video-1080",
@@ -94,7 +119,7 @@ def test_selectors_resolve_against_real_formats(quality, have_ffmpeg):
             {"formats": formats, "incomplete_formats": False}
         )
     )
-    assert matched, f"selector {selector!r} matched nothing"
+    assert [f["format_id"] for f in matched] == [expected], selector
 
 
 # --------------------------------------------------------------------------
@@ -111,6 +136,44 @@ def test_selectors_resolve_against_real_formats(quality, have_ffmpeg):
     ],
 )
 def test_client_retryable_errors(message):
+    assert yd.is_client_retryable_error(Exception(message))
+
+
+@pytest.mark.parametrize(
+    ("phrase", "message"),
+    [
+        ("http error 403", "ERROR: unable to download video data: HTTP Error 403"),
+        ("403: forbidden", "ERROR: unable to download video data: 403: Forbidden"),
+        ("video unavailable", "ERROR: [youtube] abc: Video unavailable"),
+        (
+            "this video is not available",
+            "ERROR: [youtube] abc: This video is not available",
+        ),
+        (
+            "not available on this app",
+            "ERROR: [youtube] abc: Not available on this app",
+        ),
+        (
+            "content isn't available",
+            "ERROR: [youtube] abc: This content isn't available.",
+        ),
+        (
+            "content is not available",
+            "ERROR: [youtube] abc: This content is not available.",
+        ),
+    ],
+)
+def test_every_retry_phrase_is_retryable_on_its_own(phrase, message):
+    """One case per phrase, each message matching that phrase and no other.
+
+    The realistic messages above each hit two phrases at once ("HTTP Error
+    403: Forbidden" carries both 403 spellings), so deleting either phrase
+    left them green, and five of the seven phrases were pinned by nothing.
+    The phrases are spelled out here rather than read from the tuple, which
+    is what lets a deletion fail.
+    """
+    matching = [p for p in yd._RETRYABLE_ERROR_PHRASES if p in message.lower()]
+    assert matching == [phrase]
     assert yd.is_client_retryable_error(Exception(message))
 
 
@@ -208,14 +271,31 @@ def test_success_on_a_later_client_clears_the_error(tmp_path, monkeypatch):
 
 
 def test_forced_client_is_not_retried(tmp_path, monkeypatch):
+    """-c wins over the ladder, on exactly the host where the ladder walks.
+
+    On a non-YouTube URL this passed whether or not -c was consulted first,
+    because the ladder never walks there anyway.
+    """
     calls = []
 
     def always_403(client):
         raise DownloadError("HTTP Error 403: Forbidden")
 
     _install_fake_ydl(monkeypatch, always_403, calls)
-    assert yd.download(["URL"], tmp_path, client="tv") == 1
+    assert yd.download([YT], tmp_path, client="tv") == 1
     assert calls == ["tv"]
+
+
+def test_a_youtu_be_link_walks_the_ladder(tmp_path, monkeypatch):
+    """The short host is YouTube too, so it gets the fallback clients."""
+    calls = []
+
+    def always_403(client):
+        raise DownloadError("HTTP Error 403: Forbidden")
+
+    _install_fake_ydl(monkeypatch, always_403, calls)
+    assert yd.download(["https://youtu.be/abc"], tmp_path) == 1
+    assert calls == [None, *yd.FALLBACK_CLIENTS]
 
 
 def test_a_retryable_error_on_another_host_is_not_retried(
@@ -349,6 +429,55 @@ def test_xdg_user_dir_echoing_home_is_rejected(monkeypatch, tmp_path):
     monkeypatch.setattr(yd.Path, "home", staticmethod(lambda: home))
     _stub_xdg_user_dir(monkeypatch, tmp_path, stdout=str(home) + "\n")
     assert yd._xdg_downloads_dir() is None
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        # How xdg-user-dirs-update writes a disabled entry.
+        'XDG_DOWNLOAD_DIR="$HOME/"',
+        'XDG_DOWNLOAD_DIR="$HOME"',
+        # A later line disables an earlier real one, as sourcing the file does.
+        'XDG_DOWNLOAD_DIR="$HOME/Downloads"\nXDG_DOWNLOAD_DIR="$HOME/"',
+    ],
+)
+def test_a_user_dirs_entry_pointing_at_home_is_not_an_answer(
+    monkeypatch, tmp_path, lines
+):
+    """Regression: only the xdg-user-dir branch rejected the home directory.
+
+    "$HOME" is how xdg-user-dirs marks an entry disabled. The command's echo
+    of it was already refused; the same value read from the file was taken,
+    and downloads went straight into the home directory.
+    """
+    home = tmp_path / "home"
+    monkeypatch.setattr(yd.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_DOWNLOAD_DIR", raising=False)
+    monkeypatch.setattr(yd.shutil, "which", lambda name: None)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    (tmp_path / "user-dirs.dirs").write_text(lines + "\n", encoding="utf-8")
+    assert yd._xdg_downloads_dir() is None
+
+
+def test_an_xdg_download_dir_variable_pointing_at_home_is_not_an_answer(
+    monkeypatch, tmp_path
+):
+    """The environment variable is the third source, and gets the same rule.
+
+    It falls through to the remaining sources rather than ending the lookup,
+    exactly as the command's echo of home does.
+    """
+    home = tmp_path / "home"
+    monkeypatch.setattr(yd.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_DOWNLOAD_DIR", str(home))
+    monkeypatch.setattr(yd.shutil, "which", lambda name: None)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    (tmp_path / "user-dirs.dirs").write_text(
+        'XDG_DOWNLOAD_DIR="$HOME/FromFile"\n', encoding="utf-8"
+    )
+    assert yd._xdg_downloads_dir() == home / "FromFile"
 
 
 def test_xdg_user_dir_relative_answer_is_rejected(monkeypatch, tmp_path):
@@ -577,6 +706,30 @@ def test_a_word_after_a_quoted_value_is_not_part_of_it(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     ("entry", "expected"),
     [
+        # The unquoted half of the rule above: whitespace ends it too.
+        ("XDG_DOWNLOAD_DIR=$HOME/Downloads trailing", "Downloads"),
+        # ...unless a backslash escapes it, which keeps the word whole.
+        ("XDG_DOWNLOAD_DIR=$HOME/My\\ Videos", "My Videos"),
+    ],
+)
+def test_an_unquoted_value_ends_at_whitespace(monkeypatch, tmp_path, entry, expected):
+    """Regression: an unquoted value read on past the whitespace.
+
+    "XDG_DOWNLOAD_DIR=$HOME/Downloads trailing" resolved to a directory
+    called "Downloads trailing", which mkdir() then created, while the quoted
+    form of the same line stopped at the space.
+    """
+    monkeypatch.delenv("XDG_DOWNLOAD_DIR", raising=False)
+    monkeypatch.setattr(yd.shutil, "which", lambda name: None)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "user-dirs.dirs").write_text(entry + "\n", encoding="utf-8")
+    assert yd._xdg_downloads_dir() == tmp_path / "home" / expected
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
         # Single quotes: the shell expands nothing inside them, so "$HOME" is
         # four literal characters and the path is relative - unset, exactly
         # what the desktop's reader (which rejects single quotes) concludes.
@@ -767,6 +920,34 @@ def test_registry_falls_through_to_the_compatibility_key(monkeypatch, tmp_path):
         failing_keys=(_USER_SHELL_FOLDERS,),
     )
     assert yd._windows_downloads_dir() == tmp_path / "FromCache"
+
+
+def test_the_authoritative_registry_key_wins_over_the_cache(monkeypatch, tmp_path):
+    """With both keys answering differently, "User Shell Folders" is used.
+
+    "Shell Folders" is a compatibility cache that can lag a relocation; every
+    other test gave only one of the two keys a value, so reading them in the
+    other order passed.
+    """
+    _fake_winreg(
+        monkeypatch,
+        {
+            _USER_SHELL_FOLDERS: str(tmp_path / "Current"),
+            _SHELL_FOLDERS: str(tmp_path / "Stale"),
+        },
+    )
+    assert yd._windows_downloads_dir() == tmp_path / "Current"
+
+
+def test_the_known_folder_api_wins_over_the_registry(monkeypatch, tmp_path):
+    """SHGetKnownFolderPath is consulted first and its answer is final.
+
+    It follows a relocated folder even when the registry is stale. The
+    registry tests stub it to None, so ignoring its answer passed them all.
+    """
+    _fake_winreg(monkeypatch, {_USER_SHELL_FOLDERS: str(tmp_path / "Registry")})
+    monkeypatch.setattr(yd, "_known_folder_path", lambda guid: tmp_path / "Known")
+    assert yd._windows_downloads_dir() == tmp_path / "Known"
 
 
 def test_registry_with_no_usable_key_returns_none(monkeypatch):
@@ -1120,10 +1301,22 @@ def test_every_fallback_client_is_selectable(monkeypatch):
         assert _run_main(monkeypatch, ["URL", "-c", client])["client"] == client
 
 
-def test_unknown_client_is_rejected(monkeypatch):
+def test_unknown_client_is_rejected(monkeypatch, capsys):
+    """argparse refuses the name, before anything is downloaded.
+
+    Asserting only that SystemExit was raised passed with the choices removed
+    altogether: pytest's capture is not a terminal, so _require_terminal()
+    exited 2 instead. A pretend terminal and a recorded download() take that
+    exit away, and the message pins which check refused it.
+    """
+    calls = _record_download(monkeypatch)
+    _pretend_terminal(monkeypatch)
     monkeypatch.setattr(sys, "argv", ["youtube_downloader.py", "URL", "-c", "ios"])
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as excinfo:
         yd.main()
+    assert excinfo.value.code == 2
+    assert "invalid choice: 'ios'" in capsys.readouterr().err
+    assert calls == []
 
 
 # --------------------------------------------------------------------------
@@ -1472,6 +1665,97 @@ def test_a_dollar_that_expands_to_nothing_in_the_output_directory_is_kept(
     assert opts["outtmpl"].startswith(str(tmp_path / "$5 clips"))
 
 
+def test_a_percent_variable_in_the_output_directory_is_not_refused(
+    tmp_path, monkeypatch
+):
+    """ "%NAME%" is escaped, not refused, so the $NAME guard must ignore it.
+
+    On Windows os.path.expandvars() reads %NAME% too, so without the "%" mask
+    the guard compared an expanded string and refused a directory that the
+    "%%" escape already makes safe. Only Windows can fail this; elsewhere
+    expandvars leaves "%NAME%" alone either way.
+    """
+    monkeypatch.setenv("YDTESTVAR", str(tmp_path / "elsewhere"))
+    target = tmp_path / "%YDTESTVAR%"
+    opts = _captured_opts(target, monkeypatch)
+    ydl = yt_dlp.YoutubeDL({"outtmpl": opts["outtmpl"], "quiet": True})
+    prepared = ydl.prepare_filename({"id": "abc", "title": "T", "ext": "mp4"})
+    assert prepared == str(target / "T [abc].mp4")
+
+
+def test_a_dollar_variable_followed_by_a_percent_is_refused(tmp_path, monkeypatch):
+    """Regression: deleting the "%" before the comparison hid the variable.
+
+    "$CLIPS%x" was compared as "$CLIPSx" - no such variable, so the guard
+    passed - while yt-dlp, which keeps the "%", ended the name there and
+    expanded $CLIPS. mkdir() created the named directory and the file was
+    saved outside it.
+    """
+    monkeypatch.setenv("CLIPS", str(tmp_path / "elsewhere"))
+    monkeypatch.delenv("CLIPSx", raising=False)
+    monkeypatch.setattr(yd.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    calls = []
+    _install_fake_ydl(monkeypatch, lambda client: 0, calls)
+    target = tmp_path / "$CLIPS%x"
+
+    with pytest.raises(yd.DownloaderError):
+        yd.download(["URL"], target)
+    assert calls == []
+    assert not target.exists()
+
+
+def test_a_tilde_in_the_output_directory_is_expanded_before_mkdir(
+    tmp_path, monkeypatch
+):
+    """Regression: a direct caller's "~/Clips" was created literally.
+
+    main() expands -o itself, but download() did not, so mkdir() made
+    "./~/Clips" under the working directory while yt-dlp - which runs the
+    template through expanduser() - saved the file to $HOME/Clips instead.
+    """
+    home = tmp_path / "home"
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.chdir(cwd)
+
+    opts = _captured_opts(Path("~/Clips"), monkeypatch)
+    assert not (cwd / "~").exists(), "a literal '~' directory was created"
+    assert (home / "Clips").is_dir()
+    ydl = yt_dlp.YoutubeDL({"outtmpl": opts["outtmpl"], "quiet": True})
+    prepared = ydl.prepare_filename({"id": "abc", "title": "T", "ext": "mp4"})
+    assert prepared == str(home / "Clips" / "T [abc].mp4")
+
+
+def test_a_nul_in_the_output_directory_is_a_message_not_a_valueerror(
+    tmp_path, monkeypatch
+):
+    """Regression: mkdir() refuses a NUL with ValueError, which escaped bare.
+
+    download() promises DownloaderError for a problem found before anything
+    is downloaded; a direct caller passing a NUL got a ValueError instead.
+    """
+    monkeypatch.setattr(yd.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    calls = []
+    _install_fake_ydl(monkeypatch, lambda client: 0, calls)
+
+    with pytest.raises(yd.DownloaderError, match="Cannot use output directory"):
+        yd.download(["URL"], tmp_path / "x\0y")
+    assert calls == []
+
+
+def test_an_over_long_quality_is_rejected_as_a_message(tmp_path):
+    """Regression: int() refuses decimal strings past its digit limit.
+
+    sys.get_int_max_str_digits() is 4300 by default, so a longer all-ASCII
+    decimal passed the guard and raised the bare ValueError it exists to
+    prevent.
+    """
+    with pytest.raises(yd.DownloaderError, match="Invalid quality"):
+        yd.download(["URL"], tmp_path, quality="9" * 5000)
+
+
 def test_subtitles_flag_wires_the_subtitle_options(tmp_path, monkeypatch):
     opts = _captured_opts(tmp_path, monkeypatch, subtitles=True)
     assert opts["writesubtitles"] is True
@@ -1621,6 +1905,33 @@ def test_main_is_the_declared_console_entry_point():
     assert 'youtube-downloader = "youtube_downloader:main"' in text
 
 
+def test_yt_dlp_is_required_with_its_default_extra():
+    """Plain "yt-dlp" leaves out the YouTube challenge-solver scripts.
+
+    They ship as yt-dlp-ejs in yt-dlp's [default] extra. Without them, even a
+    user with Deno installed gets the fallback client and fewer formats - and
+    no stubbed test here would notice the extra going missing.
+    """
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    assert 'dependencies = ["yt-dlp[default]>=' in text
+
+
+def test_the_version_guard_is_reachable_on_3_8():
+    """The module must compile under the 3.8 grammar, or its guard never runs.
+
+    The `sys.version_info < (3, 10)` check exists to give 3.8 and 3.9 one
+    clear sentence, but it is an ordinary statement: syntax newer than the
+    interpreter - a `match` statement, say - fails the whole file at compile
+    time, before the guard is reached. Nothing older than 3.8 can reach it
+    already, because the module uses an assignment expression.
+    """
+    import ast
+
+    module = Path(__file__).resolve().parent.parent / "youtube_downloader.py"
+    ast.parse(module.read_text(encoding="utf-8"), feature_version=(3, 8))
+
+
 # --------------------------------------------------------------------------
 # Non-absolute XDG values must be ignored
 # --------------------------------------------------------------------------
@@ -1660,6 +1971,15 @@ def test_relative_xdg_config_home_falls_back_to_dot_config(monkeypatch, tmp_path
 @pytest.mark.parametrize("value", ["", "   ", "relative/path"])
 def test_absolute_or_none_rejects_unusable_values(value):
     assert yd._absolute_or_none(value.strip()) is None
+
+
+def test_absolute_or_none_rejects_an_embedded_nul(tmp_path):
+    """Regression: a NUL byte reached mkdir(), which raises ValueError for it.
+
+    No handler names ValueError, so a user-dirs.dirs or registry value
+    carrying one became a traceback before anything was downloaded.
+    """
+    assert yd._absolute_or_none(str(tmp_path / "Dow\x00nloads")) is None
 
 
 def test_absolute_or_none_expands_vars_and_user(monkeypatch, tmp_path):
@@ -1840,25 +2160,27 @@ def test_playlist_items_backstops_the_url_check(tmp_path, monkeypatch):
 # Who owns the terminal: this tool, not yt-dlp
 #
 # "quiet" and "no_warnings" do not stop yt-dlp writing to the console. The
-# first two tests pin the options that do; the other two drive the real
-# yt-dlp code paths that wrote through them, without any network, because a
-# stubbed yt_dlp cannot show what the real one prints.
+# tests below pin the options that do, what the logger does with each of
+# yt-dlp's three channels - warnings printed once, the rest dropped - and
+# drive the real yt-dlp code paths that wrote through them, without any
+# network, because a stubbed yt_dlp cannot show what the real one prints.
 # --------------------------------------------------------------------------
 
 
 def test_yt_dlp_is_told_not_to_draw_its_own_progress(tmp_path, monkeypatch):
     """Regression: "quiet" does not imply "noprogress" for an API caller.
 
-    Without it yt-dlp drew "[download]  42.0% of ..." on stdout with a carriage
-    return and ProgressReporter.hook() redrew a shorter line on top, so the
-    terminal alternated between the two and the tail of yt-dlp's line stayed
-    visible after this tool's.
+    Before the logger existed, yt-dlp drew "[download]  42.0% of ..."
+    on stdout with a carriage return and ProgressReporter.hook() redrew a
+    shorter line on top, leaving the tail of yt-dlp's showing. The logger now
+    catches that line too, so "noprogress" is the second guard; the logger-free
+    case of test_real_yt_dlp_draws_no_progress_line_of_its_own pins it alone.
     """
     opts = _captured_opts(tmp_path, monkeypatch)
     assert opts["noprogress"] is True
 
 
-def test_yt_dlp_console_output_is_routed_to_a_silent_logger(
+def test_yt_dlp_console_output_is_routed_to_this_tools_logger(
     tmp_path, monkeypatch, capsys
 ):
     """Regression: yt-dlp's "ERROR: ..." lines reached stderr directly.
@@ -1866,19 +2188,144 @@ def test_yt_dlp_console_output_is_routed_to_a_silent_logger(
     YoutubeDL.trouble() writes the message before it raises, from inside
     ydl.download(), so it landed on the still-open progress line and then
     appeared again in this tool's own "Failed to download ..." message. A
-    logger is the only switch that redirects that write.
+    logger is the only switch that redirects that write. Its error() and
+    debug() stay silent; warning() is the channel nothing else reports, so
+    it prints.
     """
     opts = _captured_opts(tmp_path, monkeypatch)
     logger = opts["logger"]
     capsys.readouterr()
     # yt-dlp calls exactly these three on the logger it is given. Calling
-    # them, not merely finding them, is what pins "silent": a logger whose
-    # warning() printed passed a callable() check.
-    for method in ("debug", "warning", "error"):
+    # them, not merely finding them, is what pins what each one does.
+    for method in ("debug", "error"):
         getattr(logger, method)("[youtube] abc: something yt-dlp would say")
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+    logger.warning("[youtube] abc: some formats may be missing")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "Warning: [youtube] abc: some formats may be missing\n"
+
+
+def test_a_yt_dlp_warning_reaches_the_user(tmp_path, monkeypatch, capsys):
+    """Regression: every yt-dlp warning was dropped, including the one cause.
+
+    Without a JavaScript runtime yt-dlp falls back to a client that serves
+    fewer formats and says so in a warning - the only place that says it. The
+    logger discarded it, so the user got a lower quality, or "Requested format
+    is not available", and nothing to act on. Driven through the real
+    YoutubeDL's report_warning(), which is how extractors reach the logger.
+    """
+    ydl = _real_ydl_with_this_tools_options(tmp_path, monkeypatch, capsys)
+    message = (
+        "[youtube] No supported JavaScript runtime could be found. "
+        "some formats may be missing."
+    )
+    ydl.report_warning(message)
+    captured = capsys.readouterr()
+    assert captured.err == f"Warning: {message}\n"
+    assert captured.out == ""
+
+
+def test_a_warning_closes_the_progress_line_first(capsys):
+    """A warning raised mid-download must not land on the live progress line."""
+    logger = yd._YtDlpLogger()
+    logger.reporter = yd.ProgressReporter()
+    logger.reporter.hook({"status": "downloading", "_percent_str": " 42.0%"})
+    logger.warning("[youtube] abc: something to say")
+    captured = capsys.readouterr()
+    assert captured.out.endswith("\n"), "progress line left open under a warning"
+    assert "Warning: [youtube] abc: something to say" in captured.err
+
+
+def test_a_warning_repeated_by_every_attempt_is_printed_once(
+    tmp_path, monkeypatch, capsys
+):
+    """yt-dlp does not hand its only_once flag to a logger.
+
+    The retry ladder builds a fresh YoutubeDL for every client, and a batch
+    one per URL, so a warning yt-dlp means to say once came back on every
+    attempt: four times for one URL here, eight for two. One logger per run,
+    remembering what it printed, says it once. A different warning still
+    prints.
+    """
+    calls = []
+
+    class WarnsThen403YDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def download(self, urls):
+            calls.append(urls[0])
+            self.opts["logger"].warning("[youtube] No supported JavaScript runtime")
+            self.opts["logger"].warning(f"[youtube] {urls[0][-3:]}: per-video note")
+            raise DownloadError("HTTP Error 403: Forbidden")
+
+    monkeypatch.setattr(
+        yd,
+        "yt_dlp",
+        types.SimpleNamespace(YoutubeDL=WarnsThen403YDL, utils=yt_dlp.utils),
+    )
+
+    other = "https://www.youtube.com/watch?v=xyz"
+    assert yd.download([YT, other], tmp_path) == 2
+    assert len(calls) == 2 * (1 + len(yd.FALLBACK_CLIENTS))
+    err = capsys.readouterr().err
+    assert err.count("No supported JavaScript runtime") == 1
+    assert err.count("abc: per-video note") == 1
+    assert err.count("xyz: per-video note") == 1
+
+
+def test_download_points_the_logger_at_each_urls_progress_line(tmp_path, monkeypatch):
+    """The logger closes the line of the URL being downloaded, not none at all.
+
+    download() builds one reporter per URL, and the run-wide logger has to be
+    told which one is current, or a warning raised mid-download is printed
+    with the progress line still open above it. Both streams go to one buffer
+    here, as they share one terminal, so the order of the writes is visible.
+    """
+
+    class ProgressThenWarnYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def download(self, urls):
+            for hook in self.opts["progress_hooks"]:
+                hook({"status": "downloading", "_percent_str": " 42.0%"})
+            self.opts["logger"].warning(f"[youtube] {urls[0]}: mid-download")
+            return 0
+
+    monkeypatch.setattr(
+        yd,
+        "yt_dlp",
+        types.SimpleNamespace(YoutubeDL=ProgressThenWarnYDL, utils=yt_dlp.utils),
+    )
+
+    terminal = _TerminalStringIO()
+    monkeypatch.setattr(sys, "stdout", terminal)
+    monkeypatch.setattr(sys, "stderr", terminal)
+    monkeypatch.setattr(yd.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+
+    assert yd.download(["URL1", "URL2"], tmp_path) == 0
+    out = terminal.getvalue()
+    # Closed *before* the warning, for each URL in turn: without the logger
+    # knowing the current reporter, the warning lands on the open line and
+    # only the end-of-URL close ends it, after the warning.
+    for url in ("URL1", "URL2"):
+        assert f"42.0% at ?, ETA ?   \nWarning: [youtube] {url}: mid-download\n" in out
 
 
 def _real_ydl_with_this_tools_options(tmp_path, monkeypatch, capsys):
@@ -1893,11 +2340,24 @@ def _real_ydl_with_this_tools_options(tmp_path, monkeypatch, capsys):
     return yt_dlp.YoutubeDL(opts)
 
 
-def test_real_yt_dlp_draws_no_progress_line_of_its_own(tmp_path, monkeypatch, capsys):
-    """The real downloader, fed one progress event: only this tool's line."""
+@pytest.mark.parametrize("with_logger", [True, False])
+def test_real_yt_dlp_draws_no_progress_line_of_its_own(
+    tmp_path, monkeypatch, capsys, with_logger
+):
+    """The real downloader, fed one progress event: only this tool's line.
+
+    Two guards keep yt-dlp's own line away: the logger, whose debug() it
+    routes the line to, and "noprogress", which draws nothing at all. With the
+    logger in place either one suffices, so the logger-free case is what
+    shows "noprogress" doing its job.
+    """
     from yt_dlp.downloader import get_suitable_downloader
 
     ydl = _real_ydl_with_this_tools_options(tmp_path, monkeypatch, capsys)
+    if not with_logger:
+        params = dict(ydl.params)
+        del params["logger"]
+        ydl = yt_dlp.YoutubeDL(params)
     info = {"protocol": "https", "url": "u", "id": "abc", "title": "T", "ext": "mp4"}
     # Mirrors YoutubeDL.dl(): the downloader is built per file and the
     # YoutubeDL-level hooks are attached to it there.
@@ -1927,11 +2387,14 @@ def test_real_yt_dlp_draws_no_progress_line_of_its_own(tmp_path, monkeypatch, ca
 def test_real_yt_dlp_error_report_writes_nothing_to_the_console(
     tmp_path, monkeypatch, capsys
 ):
-    """report_error() is what yt-dlp calls before raising DownloadError."""
+    """report_error() is what yt-dlp calls before raising DownloadError.
+
+    Its text comes back in download()'s own "Failed to download ..." line, so
+    printing it here as well said it twice.
+    """
     ydl = _real_ydl_with_this_tools_options(tmp_path, monkeypatch, capsys)
-    # The other two channels yt-dlp writes through: a warning and an
-    # informational line. Neither may reach the console either.
-    ydl.report_warning("[youtube] abc: some formats may be missing")
+    # yt-dlp's informational channel stays off the console too; warnings,
+    # the third channel, are the ones this tool prints (tested above).
     ydl.to_screen("[info] abc: Downloading 1 format(s)")
     with pytest.raises(DownloadError):
         ydl.report_error("[youtube] abc: Video unavailable")
@@ -1965,7 +2428,13 @@ def test_a_piped_stdout_is_refused_before_anything_is_downloaded(monkeypatch, ca
         yd.main()
     assert excinfo.value.code == 2
     captured = capsys.readouterr()
-    assert "must be run directly in a terminal" in captured.err
+    # Named the way argparse names the program in its usage line - for the
+    # installed command, "youtube-downloader" - not by the module's file name,
+    # which the message used to hard-code. (Under `python -m pytest`, argparse
+    # names it after pytest instead, so the name is computed, not spelled.)
+    prog = argparse.ArgumentParser().prog
+    assert f"{prog} must be run directly in a terminal" in captured.err
+    assert "youtube_downloader.py" not in captured.err
     assert captured.out == ""
     assert calls == []
 
@@ -2066,7 +2535,7 @@ def test_version_string_is_not_built_for_help(monkeypatch, capsys):
 # or exercise a function that never reaches yt-dlp at all, which is what keeps
 # the suite offline and fast - but it also means a yt-dlp release that renamed
 # something this module hard-codes could ship green and only break for users.
-# The two tests below exist for the sole purpose of pinning those names
+# The three tests below exist for the sole purpose of pinning those names
 # against the real yt-dlp, so the weekly Dependabot bump of the
 # constraints.txt pin is what surfaces such a rename.
 #
@@ -2080,7 +2549,7 @@ def test_version_string_is_not_built_for_help(monkeypatch, capsys):
 # output template through a real prepare_filename(), and the closed-pipe
 # tests built on _real_ydl_with_a_fake_site() and _spawn_real_download()
 # run a real YoutubeDL end to end against a fake site. Those assert about
-# this wrapper's behaviour and happen to need yt-dlp to do it; these two
+# this wrapper's behaviour and happen to need yt-dlp to do it; these three
 # assert about yt-dlp itself.
 # --------------------------------------------------------------------------
 
@@ -2096,6 +2565,21 @@ def test_the_announce_hook_postprocessor_name_still_exists():
     from yt_dlp.postprocessor import MoveFilesAfterDownloadPP
 
     assert MoveFilesAfterDownloadPP.pp_key() == "MoveFiles"
+
+
+def test_the_audio_extraction_postprocessor_key_still_resolves(tmp_path, monkeypatch):
+    """--audio-only names its postprocessor by key, and yt-dlp resolves it.
+
+    The key reaches yt-dlp as plain text in opts["postprocessors"], and
+    yt-dlp turns it into a class by name. If that class is ever renamed, the
+    resolution fails only at download time, for every --audio-only user, while
+    the stub-based tests that compare the dict stay green.
+    """
+    from yt_dlp.postprocessor import FFmpegExtractAudioPP, get_postprocessor
+
+    opts = _captured_opts(tmp_path, monkeypatch, audio_only=True)
+    key = opts["postprocessors"][0]["key"]
+    assert get_postprocessor(key) is FFmpegExtractAudioPP
 
 
 def test_every_configured_player_client_is_known_to_yt_dlp():
@@ -2354,6 +2838,32 @@ def test_an_unencodable_url_is_a_message_not_a_traceback(monkeypatch, tmp_path):
     assert excinfo.value.code != 0
     # It failed on its own output, before yt-dlp was ever asked for anything.
     assert calls == []
+
+
+def test_an_unencodable_announce_on_a_fixed_stream_is_not_a_failed_download(
+    monkeypatch, tmp_path
+):
+    """The encoding half of download()'s own-write re-raise clause.
+
+    The "Downloaded: ..." line is printed from the postprocessor hook, inside
+    download()'s try, so on a stream main() cannot make tolerant the
+    _OwnWriteEncodeError it raises meets the per-attempt `except Exception`
+    unless the clause re-raises it. Without the clause the run reported "1
+    download(s) failed." over a saved video, and nothing in the suite noticed:
+    the cp1252 test above uses a stream main() reconfigures, so nothing raises.
+    """
+    stream = _AsciiOnlyStream()
+    _announcing_ydl(monkeypatch, "C:/Downloads/\u30c6\u30b9\u30c8 [id].mp4")
+    err = _own_streams(monkeypatch, stdout=stream)
+    monkeypatch.setattr(sys, "argv", ["youtube-downloader", "URL", "-o", str(tmp_path)])
+
+    with pytest.raises(SystemExit) as excinfo:
+        yd.main()
+    assert "encoding cannot represent" in str(excinfo.value)
+    assert "download(s) failed" not in str(excinfo.value)
+    assert "Failed to download" not in err.getvalue()
+    # The write before the announcement got through: this is the hook's write.
+    assert "Fetching: URL" in stream.text
 
 
 def test_the_platforms_own_closed_pipe_error_is_handled(monkeypatch, tmp_path):
@@ -2655,7 +3165,7 @@ def test_a_pipe_closed_on_the_announce_write_is_not_a_failed_download(
     The real YoutubeDL wraps an OSError raised inside dl() - which is where
     the progress hooks run - but not one raised from a postprocessor hook, so
     the BrokenPipeError from the "Downloaded: ..." line reaches download()
-    bare. Only the `except (BrokenPipeError, UnicodeEncodeError): raise`
+    bare. Only the `except (_OwnWritePipeError, _OwnWriteEncodeError): raise`
     clause stands between it and the per-attempt `except Exception`, and
     until this test existed nothing in the suite raised through that clause:
     deleting it left every test green while the tool reported "1 download(s)
@@ -2793,3 +3303,92 @@ def test_only_this_tools_own_pipe_error_is_unwrapped():
 
     with pytest.raises(yd._OwnWritePipeError):
         yd._print("x", file=ClosedPipe())
+
+
+# --------------------------------------------------------------------------
+# An encoding error that is not ours
+#
+# The same split for UnicodeEncodeError: this tool's stream refusing a
+# character is not a download failure, but yt-dlp raising one is.
+# --------------------------------------------------------------------------
+
+
+def test_an_unencodable_filename_is_a_failed_download_not_a_terminal_problem(
+    monkeypatch, tmp_path
+):
+    """Regression: yt-dlp's UnicodeEncodeError was taken for this tool's own.
+
+    yt-dlp opens the output file by name, and a filesystem encoding that
+    cannot represent the title - a lone surrogate on UTF-8 Linux, or any
+    non-Latin title under a Latin-1 locale - raises UnicodeEncodeError from
+    open(), unwrapped. download() re-raised every UnicodeEncodeError as an
+    output-stream failure, so main() told the user to set PYTHONIOENCODING,
+    which cannot help, and abandoned every remaining URL. It is a failed
+    download, and the next URL still runs.
+    """
+    from yt_dlp.downloader.http import HttpFD
+    from yt_dlp.extractor.common import InfoExtractor
+
+    extracted = []
+
+    class FakeSiteIE(InfoExtractor):
+        _VALID_URL = r"fake://(?P<id>\w+)"
+
+        def _real_extract(self, url):
+            vid = self._match_id(url)
+            extracted.append(vid)
+            fmt = {
+                "format_id": "f",
+                "url": "https://example.invalid/x.mp4",
+                "ext": "mp4",
+                "protocol": "https",
+                "vcodec": "avc1",
+                "acodec": "mp4a",
+            }
+            title = "テスト" if vid == "one" else "T"
+            return {"id": vid, "title": title, "formats": [fmt]}
+
+    class RealYDLWithFakeSite(yt_dlp.YoutubeDL):
+        def __init__(self, params):
+            super().__init__(params, auto_init=False)
+            self.add_info_extractor(FakeSiteIE())
+
+    def opens_with_an_ascii_filesystem(self, filename, info_dict):
+        # What open() raises when the filesystem encoding cannot hold the name.
+        filename.encode("ascii")
+        return True
+
+    monkeypatch.setattr(HttpFD, "real_download", opens_with_an_ascii_filesystem)
+    monkeypatch.setattr(
+        yd,
+        "yt_dlp",
+        types.SimpleNamespace(YoutubeDL=RealYDLWithFakeSite, utils=yt_dlp.utils),
+    )
+    monkeypatch.setattr(yd.shutil, "which", lambda name: None)
+    err = _own_streams(monkeypatch)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["youtube-downloader", "fake://one", "fake://two", "-o", str(tmp_path)],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        yd.main()
+    assert "1 download(s) failed" in str(excinfo.value)
+    assert "Failed to download fake://one" in err.getvalue()
+    assert "PYTHONIOENCODING" not in str(excinfo.value)
+    assert extracted == ["one", "two"]
+
+
+def test_only_this_tools_own_encoding_error_is_tagged():
+    """_print() is where the subclass comes from; nothing else raises it."""
+
+    class AsciiStream:
+        def write(self, text):
+            text.encode("ascii")
+
+        def flush(self):
+            pass
+
+    with pytest.raises(yd._OwnWriteEncodeError):
+        yd._print("テ", file=AsciiStream())

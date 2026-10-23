@@ -9,13 +9,13 @@ dist/
 venv/
 env/
 
-# Tooling caches
+# Tooling caches (pytest, ruff and mypy are pointed at tests/ in pyproject.toml;
+# these patterns are unanchored so they also catch a stray root-level run)
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-.tox/
-.coverage
-htmlcov/
+.dmypy.json
+dmypy.json
 .python-version
 *.log
 
@@ -31,49 +31,40 @@ htmlcov/
 *.swp
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Downloaded media and yt-dlp intermediates. These land in the working
-# directory whenever the tool is run with `-o .`. Anchored with a leading "/"
-# so the patterns only cover the repository root - an unanchored *.mp4 would
-# also swallow a deliberate test fixture under tests/.
-/*.part
-# Fragment temporaries are named "<file>.part-FragN", which does not end in
-# ".part" and so is not covered by the pattern above.
-/*.part-Frag*
-/*.ytdl
-/*.mp4
-/*.mkv
-/*.webm
-/*.mp3
-/*.m4a
-/*.opus
+# Downloaded media and yt-dlp intermediates. These land wherever -o points,
+# which can be any folder inside the checkout, so the patterns are unanchored.
+# If a deliberate media fixture is ever added, re-include it explicitly, e.g.:
+#   !tests/fixtures/**
+*.part
+# Fragment temporaries are named "<file>.part-FragN".
+*.part-Frag*
+*.ytdl
+*.mp4
+*.mkv
+*.webm
+*.mp3
+*.m4a
+*.opus
 # Containers the no-ffmpeg single-file path can hand back.
-/*.m4v
-/*.3gp
-/*.flv
-/*.ogg
-/*.aac
-/*.wav
-# Subtitle formats. --subtitles asks for the best available, which is usually
-# vtt, but YouTube offers the others and yt-dlp will write whichever it gets.
-/*.vtt
-/*.srt
-/*.ass
-/*.ttml
-/*.json3
-/*.srv[123]
+*.m4v
+*.3gp
+*.flv
+*.ogg
+*.aac
+*.wav
+# Subtitle formats yt-dlp may write with --subtitles.
+*.vtt
+*.srt
+*.ass
+*.ttml
+*.json3
+*.srv[123]
 
-# Pre-publication audit report. A working document, not a project deliverable -
-# and this repository is already public, so committing it would publish an
-# audit naming defects that are still open. Kept under tests/ with the rest of
-# the working files, so the entries are anchored there.
+# Pre-publication audit working documents. Internal records written in terms of
+# the audit's own finding numbers; not project deliverables.
 /tests/AUDIT_FINDINGS.md
 /tests/FINDINGS.md
-# The session log is the same class of document: an internal record of what was
-# changed and why, written in terms of the audit's own finding numbers. It
-# cross-references FINDINGS.md, which is excluded above, so published on its own
-# every one of those references would dangle.
 /tests/LOG.md
-# The verification report is written in the same finding numbers and against
-# the same two files, so it is excluded for the same reason.
 /tests/VERIFY.md
