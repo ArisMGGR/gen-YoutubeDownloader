@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import errno
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -704,6 +705,15 @@ _YOUTUBE_HOSTS = frozenset(
 )
 _YOUTUBE_SHORT_HOSTS = frozenset({"youtu.be"})
 
+# Hosts yt-dlp's YouTube extractor also serves, so the -c ladder means
+# something there, but whose URL shapes single_video_problem() does not
+# classify. youtubekids.com is where "made for kids" videos - the very case
+# the ladder exists for - are usually linked from.
+_YOUTUBE_PLAYER_HOSTS = frozenset({"youtubekids.com", "youtube.googleapis.com"})
+
+# yt-dlp also accepts a naked video id as a YouTube URL.
+_BARE_VIDEO_ID = re.compile(r"[0-9A-Za-z_-]{11}")
+
 # Path prefixes that address exactly one video by id, e.g. "/shorts/VIDEO_ID".
 # "/e/" is the older spelling of "/embed/" that yt-dlp's YouTube extractor
 # still lists; "/clip/" is the "Share clip" URL, which names one segment of
@@ -757,8 +767,14 @@ def _is_youtube_url(url: str) -> bool:
     YouTube extractors read. Walking it for any other host re-ran the identical
     request three more times behind a notice about YouTube player clients.
     """
+    if _BARE_VIDEO_ID.fullmatch(url):
+        return True
     host = _parsed_host(url)
-    return host in _YOUTUBE_HOSTS or host in _YOUTUBE_SHORT_HOSTS
+    return (
+        host in _YOUTUBE_HOSTS
+        or host in _YOUTUBE_SHORT_HOSTS
+        or host in _YOUTUBE_PLAYER_HOSTS
+    )
 
 
 def _describe_youtube_target(path: str, query: dict[str, list[str]]) -> str:

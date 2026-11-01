@@ -298,6 +298,46 @@ def test_a_youtu_be_link_walks_the_ladder(tmp_path, monkeypatch):
     assert calls == [None, *yd.FALLBACK_CLIENTS]
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.youtubekids.com/watch?v=dQw4w9WgXcQ",
+        "https://youtube.googleapis.com/v/dQw4w9WgXcQ",
+        "dQw4w9WgXcQ",
+    ],
+)
+def test_other_targets_of_the_youtube_extractor_walk_the_ladder(
+    tmp_path, monkeypatch, url
+):
+    """Regression: only _YOUTUBE_HOSTS walked the ladder.
+
+    yt-dlp's YouTube extractor also serves youtubekids.com, the googleapis
+    host and a naked video id, so extractor_args["youtube"] applies there -
+    and a "made for kids" video, the case the ladder exists for, is usually
+    linked from youtubekids.com. Each got a single attempt.
+    """
+    from yt_dlp.extractor.youtube import YoutubeIE
+
+    assert YoutubeIE.suitable(url)
+    calls = []
+
+    def always_unavailable(client):
+        raise DownloadError("ERROR: [youtube] dQw4w9WgXcQ: Video unavailable")
+
+    _install_fake_ydl(monkeypatch, always_unavailable, calls)
+    assert yd.download([url], tmp_path) == 1
+    assert calls == [None, *yd.FALLBACK_CLIENTS]
+
+
+def test_a_host_that_merely_starts_like_a_video_id_is_not_youtube():
+    """The bare-id rule matches the whole argument, not its first 11 chars.
+
+    A scheme-less "dailymotion.com/..." opens with 11 id characters, so a
+    prefix match took it for YouTube and sent it round the client ladder.
+    """
+    assert not yd._is_youtube_url("dailymotion.com/video/x8abc")
+
+
 def test_a_retryable_error_on_another_host_is_not_retried(
     tmp_path, monkeypatch, capsys
 ):
@@ -727,6 +767,15 @@ def test_an_unquoted_value_ends_at_whitespace(monkeypatch, tmp_path, entry, expe
     assert yd._xdg_downloads_dir() == tmp_path / "home" / expected
 
 
+def test_a_trailing_backslash_in_an_unquoted_value_is_kept():
+    """A backslash with nothing after it escapes nothing; it must not raise.
+
+    Reading the character after it unguarded raised IndexError, which no
+    handler names: a traceback over one stray character in user-dirs.dirs.
+    """
+    assert yd._config_value("$HOME/Downloads\\") == ("$HOME/Downloads\\", True)
+
+
 @pytest.mark.parametrize(
     ("entry", "expected"),
     [
@@ -767,6 +816,23 @@ def test_shell_quoting_rules_are_followed(monkeypatch, tmp_path, entry, expected
         assert yd._xdg_downloads_dir() == Path(abs_lit)
     else:
         assert yd._xdg_downloads_dir() == home / expected
+
+
+def test_a_backslash_inside_single_quotes_is_literal(monkeypatch, tmp_path):
+    """Single quotes take everything literally, the double-quote escapes too.
+
+    A backslash before a quote is an escape only inside double quotes. Applying
+    it inside single quotes as well dropped the backslash and resolved a
+    different directory than the shell sourcing the file does.
+    """
+    abs_lit = str(tmp_path / "Literal")
+    monkeypatch.delenv("XDG_DOWNLOAD_DIR", raising=False)
+    monkeypatch.setattr(yd.shutil, "which", lambda name: None)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    (tmp_path / "user-dirs.dirs").write_text(
+        f"XDG_DOWNLOAD_DIR='{abs_lit}x\\\"y'\n", encoding="utf-8"
+    )
+    assert yd._xdg_downloads_dir() == Path(abs_lit + 'x\\"y')
 
 
 def test_a_byte_order_mark_does_not_hide_the_first_entry(monkeypatch, tmp_path):
@@ -2017,6 +2083,9 @@ def test_absolute_or_none_expands_vars_and_user(monkeypatch, tmp_path):
         "https://www.youtube.com/?v=abc123",
         "https://www.youtube.com/watch_popup?v=abc123",
         "https://www.youtube.com/clip/UgkxSomeClipId",
+        # A trailing slash before the query, which yt-dlp also accepts; only
+        # the rstrip("/") of the path makes it match "/watch".
+        "https://www.youtube.com/watch/?v=abc123",
         # Regression: a channel's own "/live" page is the one video currently
         # streaming there - yt-dlp's tab extractor redirects to it - and each
         # of these was refused as "a channel".
